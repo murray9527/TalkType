@@ -55,40 +55,41 @@ private struct ModelsTab: View {
     @ObservedObject private var settings = AppSettings.shared
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Whisper 模型路径")
-                .font(.headline)
-
-            HStack {
-                TextField("模型文件路径 (.bin)", text: $settings.whisperModelPath)
-                    .textFieldStyle(.roundedBorder)
-                Button("选择…") {
-                    selectModelFile()
+        Form {
+            Section("Whisper 语音识别模型") {
+                HStack {
+                    TextField("模型文件路径 (.bin)", text: $settings.whisperModelPath)
+                        .textFieldStyle(.roundedBorder)
+                    Button("选择…") {
+                        let panel = NSOpenPanel()
+                        panel.allowsOtherFileTypes = true
+                        panel.message = "选择 Whisper .bin 模型文件"
+                        if panel.runModal() == .OK, let url = panel.url {
+                            settings.whisperModelPath = url.path
+                        }
+                    }
                 }
+                Text("默认：\(settings.resolvedWhisperModelPath)")
+                    .font(.caption).foregroundStyle(.secondary)
             }
 
-            Text("当前模型：\(settings.whisperModelPath.isEmpty ? "未选择" : URL(fileURLWithPath: settings.whisperModelPath).lastPathComponent)")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            Section("语气转换 LLM 服务") {
+                TextField("API 地址", text: $settings.llmBaseURL)
+                    .textFieldStyle(.roundedBorder)
+                TextField("模型名称（可留空）", text: $settings.llmModel)
+                    .textFieldStyle(.roundedBorder)
+                SecureField("API Key（本地服务可留空）", text: $settings.llmApiKey)
+                    .textFieldStyle(.roundedBorder)
 
-            Divider()
-
-            Text("模型下载功能将在后续版本中加入。")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-
-            Spacer()
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("支持任何 OpenAI 兼容接口：").font(.caption).foregroundStyle(.secondary)
+                    Text("• 本地 llama-server：http://127.0.0.1:8080").font(.caption2).foregroundStyle(.tertiary)
+                    Text("• Ollama：http://127.0.0.1:11434/v1 + 模型名 qwen2.5:1.5b").font(.caption2).foregroundStyle(.tertiary)
+                    Text("• DeepSeek / 其他云端 API：填入对应地址和 Key").font(.caption2).foregroundStyle(.tertiary)
+                }
+            }
         }
+        .formStyle(.grouped)
         .padding()
-    }
-
-    private func selectModelFile() {
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = []
-        panel.allowsOtherFileTypes = true
-        panel.message = "选择 Whisper .bin 模型文件"
-        if panel.runModal() == .OK, let url = panel.url {
-            AppSettings.shared.whisperModelPath = url.path
-        }
     }
 }

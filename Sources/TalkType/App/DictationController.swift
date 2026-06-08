@@ -8,15 +8,42 @@ import SwiftUI
 final class DictationController {
     private let recorder = AudioRecorder()
     private let whisper = WhisperEngine()
+    private let llama = LlamaEngine()
     private let postProcessor = TextPostProcessor()
     private let inserter = TextInserter()
     private let popupController = PopupWindowController()
     private let settings = AppSettings.shared
 
     private var styledText: String? = nil
+    private var isModelLoaded = false
+
+    init() {
+        Task { await loadWhisper() }
+    }
+
+    private func loadWhisper() async {
+        let path = settings.resolvedWhisperModelPath
+        guard FileManager.default.fileExists(atPath: path) else {
+            print("[DictationController] Whisper model not found at: \(path)")
+            return
+        }
+        do {
+            try await whisper.loadModel(at: path)
+            isModelLoaded = true
+            print("[DictationController] Whisper loaded: \(URL(fileURLWithPath: path).lastPathComponent)")
+        } catch {
+            print("[DictationController] Whisper load failed: \(error)")
+        }
+    }
+
+    // MARK: - Recording
 
     func startRecording() {
         guard !recorder.isRecording else { return }
+        guard isModelLoaded else {
+            print("[DictationController] Whisper not loaded yet")
+            return
+        }
         do {
             try recorder.startRecording()
         } catch {
@@ -30,6 +57,8 @@ final class DictationController {
         Task { await transcribeAndProcess(samples: samples) }
     }
 
+    // MARK: - Pipeline
+
     private func transcribeAndProcess(samples: [Float]) async {
         // Step 1: ASR
         guard let rawText = try? await whisper.transcribe(
@@ -39,14 +68,15 @@ final class DictationController {
 
         // Step 2: Basic correction (always)
         let basicText = postProcessor.process(rawText)
+        print("[Pipeline] basic: \(basicText)")
 
-        // Step 3: If tone conversion disabled → insert immediately, done
+        // Step 3: No tone conversion → insert immediately
         guard settings.isToneConversionEnabled else {
             inserter.insert(basicText)
             return
         }
 
-        // Step 4: Show popup with basic text; kick off LLM async
+        // Step 4: Show popup; LLM conversion runs concurrently
         styledText = nil
         let styledBinding = Binding<String?>(
             get: { [weak self] in self?.styledText },
@@ -60,16 +90,24 @@ final class DictationController {
             onDismiss: {}
         )
 
-        // LLM tone conversion runs concurrently
         Task {
             let styled = await convertTone(basicText)
+            print("[Pipeline] styled (\(settings.toneStyle.rawValue)): \(styled)")
             styledText = styled
         }
     }
 
     private func convertTone(_ text: String) async -> String {
-        // Placeholder — will call llama.cpp engine in Week 5-6
-        // For now returns text unchanged so the pipeline is testable end-to-end
-        return text
+        // Update LLM config from latest settings before each call
+        await llama.updateConfig(settings.llamaConfig)
+        do {
+            return try await llama.convert(
+                text: text,
+                systemPrompt: settings.toneStyle.systemPrompt
+            )
+        } catch {
+            print("[DictationController] LLM inference failed: \(error) — using basic text")
+            return text
+        }
     }
 }
