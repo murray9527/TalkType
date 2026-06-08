@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls /Users/maleeeei/Projects/talk-type/ 2>/dev/null || echo \"Directory empty or not accessible\")",
+      "WebFetch(*)"
+    ]
+  }
+}
