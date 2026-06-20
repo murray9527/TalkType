@@ -1,13 +1,19 @@
 import Foundation
 import whisper
 
-// Wraps whisper.cpp context and performs transcription on 16kHz float32 PCM samples.
+/// Thread-safe flag for signalling cancellation across task boundaries.
+final class CancelFlag: @unchecked Sendable {
+    var isSet = false
+}
+
 actor WhisperEngine {
-    private var context: OpaquePointer?
+    nonisolated(unsafe) private var context: OpaquePointer?
+    private var isTranscribing = false
 
     enum WhisperError: Error {
         case modelNotLoaded
         case transcriptionFailed
+        case busy
     }
 
     func loadModel(at path: String) throws {
@@ -19,35 +25,77 @@ actor WhisperEngine {
         context = ctx
     }
 
-    func transcribe(samples: [Float], language: String = "zh") throws -> String {
+    func checkBusy() throws {
+        guard !isTranscribing else { throw WhisperError.busy }
+    }
+
+    func transcribe(samples: [Float], language: String = "zh") async throws -> String {
         guard let ctx = context else { throw WhisperError.modelNotLoaded }
-
-        var params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY)
-        params.language = (language as NSString).utf8String
-        params.translate = false
-        params.no_context = true
-        params.single_segment = false
-        params.print_progress = false
-        params.print_realtime = false
-        params.print_timestamps = false
-
-        let result = samples.withUnsafeBufferPointer { ptr in
-            whisper_full(ctx, params, ptr.baseAddress, Int32(ptr.count))
+        guard !isTranscribing else {
+            print("[Whisper] Busy — dropping overlapping transcription request")
+            throw WhisperError.busy
         }
-        guard result == 0 else { throw WhisperError.transcriptionFailed }
+        isTranscribing = true
+        defer { isTranscribing = false }
 
-        let segmentCount = whisper_full_n_segments(ctx)
-        var text = ""
-        for i in 0..<segmentCount {
-            if let t = whisper_full_get_segment_text(ctx, i) {
-                text += String(cString: t)
+        try Task.checkCancellation()
+
+        let nsLang = language as NSString
+        nonisolated(unsafe) let capturedCtx = ctx
+        nonisolated(unsafe) var capturedParams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY)
+        capturedParams.language = nsLang.utf8String
+        capturedParams.translate = false
+        capturedParams.no_context = true
+        capturedParams.single_segment = false
+        capturedParams.print_progress = false
+        capturedParams.print_realtime = false
+        capturedParams.print_timestamps = false
+
+        let flag = CancelFlag()
+
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                Task.detached {
+                    let rc = samples.withUnsafeBufferPointer { ptr in
+                        whisper_full(capturedCtx, capturedParams, ptr.baseAddress, Int32(ptr.count))
+                    }
+
+                    if flag.isSet {
+                        continuation.resume(throwing: CancellationError())
+                        return
+                    }
+
+                    guard rc == 0 else {
+                        continuation.resume(throwing: WhisperError.transcriptionFailed)
+                        return
+                    }
+
+                    let segmentCount = whisper_full_n_segments(capturedCtx)
+                    var text = ""
+                    for i in 0..<segmentCount {
+                        if let t = whisper_full_get_segment_text(capturedCtx, i) {
+                            text += String(cString: t)
+                        }
+                    }
+
+                    if flag.isSet {
+                        continuation.resume(throwing: CancellationError())
+                    } else {
+                        continuation.resume(returning: text.trimmingCharacters(in: .whitespaces))
+                    }
+                }
             }
+        } onCancel: {
+            flag.isSet = true
         }
-        return text.trimmingCharacters(in: .whitespaces)
     }
 
     func unload() {
         if let ctx = context { whisper_free(ctx) }
         context = nil
+    }
+
+    deinit {
+        if let ctx = context { whisper_free(ctx) }
     }
 }

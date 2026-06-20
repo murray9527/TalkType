@@ -6,21 +6,59 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private var hotkeyManager: HotkeyManager?
     private var dictationController: DictationController?
+    private var onboardingWindow: NSWindow?
+    private var preferencesWindow: NSWindow?
+    private var hotkeyObserver: NSObjectProtocol?
+    private var cachedHotkeyKeyCode: Int = 0
+    private var cachedHotkeyModifiers: Int = 0
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory) // No Dock icon
 
         setupStatusItem()
         setupHotkey()
+
         dictationController = DictationController()
+
+        if !UserDefaults.standard.bool(forKey: "hasCompletedOnboarding") {
+            showOnboarding()
+        }
+    }
+
+    private func showOnboarding() {
+        var isComplete = false
+        let binding = Binding<Bool>(
+            get: { isComplete },
+            set: { [weak self] val in
+                isComplete = val
+                if val {
+                    UserDefaults.standard.set(true, forKey: "hasCompletedOnboarding")
+                    self?.onboardingWindow?.close()
+                    self?.onboardingWindow = nil
+                }
+            }
+        )
+
+        let view = NSHostingView(rootView: OnboardingView(isComplete: binding))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: 420),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "欢迎使用 TalkType"
+        window.contentView = view
+        window.center()
+        window.isReleasedWhenClosed = false
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        onboardingWindow = window
     }
 
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         guard let button = statusItem?.button else { return }
         button.image = NSImage(systemSymbolName: "mic", accessibilityDescription: "TalkType")
-        button.action = #selector(statusItemClicked)
-        button.target = self
 
         let menu = NSMenu()
         menu.addItem(NSMenuItem(title: "偏好设置...", action: #selector(openPreferences), keyEquivalent: ","))
@@ -30,7 +68,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func setupHotkey() {
-        hotkeyManager = HotkeyManager()
+        let s = AppSettings.shared
+        hotkeyManager = HotkeyManager(keyCode: s.hotkeyKeyCode, modifiers: s.hotkeyModifiers)
+        wireHotkeyCallbacks()
+
+        // Only re-register the Carbon hotkey when its keyCode or modifiers actually change.
+        // Listening to all UserDefaults changes (download progress, preferences) would cause
+        // unnecessary re-registrations on every minor setting update.
+        cachedHotkeyKeyCode = s.hotkeyKeyCode
+        cachedHotkeyModifiers = s.hotkeyModifiers
+        let center = NotificationCenter.default
+        let ud = UserDefaults.standard
+        hotkeyObserver = center.addObserver(forName: UserDefaults.didChangeNotification, object: ud, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let newCode = s.hotkeyKeyCode
+                let newMods = s.hotkeyModifiers
+                if newCode != cachedHotkeyKeyCode || newMods != cachedHotkeyModifiers {
+                    cachedHotkeyKeyCode = newCode
+                    cachedHotkeyModifiers = newMods
+                    self.hotkeyManager?.reregister(keyCode: newCode, modifiers: newMods)
+                }
+            }
+        }
+    }
+
+    private func wireHotkeyCallbacks() {
         hotkeyManager?.onKeyDown = { [weak self] in
             Task { @MainActor [weak self] in
                 self?.dictationController?.startRecording()
@@ -39,7 +102,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         hotkeyManager?.onKeyUp = { [weak self] in
             Task { @MainActor [weak self] in
-                self?.dictationController?.stopRecording()
+                await self?.dictationController?.stopRecording()
                 self?.updateStatusIcon(.transcribing)
             }
         }
@@ -57,10 +120,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem?.button?.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)
     }
 
-    @objc private func statusItemClicked() {}
+    func applicationWillTerminate(_ notification: Notification) {
+        if let observer = hotkeyObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+    }
 
     @objc private func openPreferences() {
-        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        if preferencesWindow == nil {
+            let view = NSHostingView(rootView: PreferencesView())
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 520, height: 480),
+                styleMask: [.titled, .closable],
+                backing: .buffered,
+                defer: false
+            )
+            window.title = "TalkType 偏好设置"
+            window.contentView = view
+            window.center()
+            window.isReleasedWhenClosed = false
+            preferencesWindow = window
+        }
+        preferencesWindow?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
 }

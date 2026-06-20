@@ -1,64 +1,62 @@
 import Foundation
 
-// LLM client that talks to any OpenAI-compatible HTTP endpoint.
-// Supports:
-//   - Local llama-server: http://127.0.0.1:8080 (llama.cpp built-in server)
-//   - Ollama: http://127.0.0.1:11434/v1
-//   - Any OpenAI-compatible API (DeepSeek, Groq, etc.) — user supplies base URL + key
-//
-// When baseURL is a local address (127.0.0.1 / localhost), no API key is required.
-actor LlamaEngine {
-
-    // MARK: - Configuration
+// LLM client for any OpenAI-compatible chat completions HTTP endpoint.
+// Supports AliCloud DashScope, DeepSeek, Xiaomi MiMo, Ollama, local llama-server, etc.
+actor LLMEngine {
 
     struct Config: Sendable {
-        var baseURL: String    // e.g. "http://127.0.0.1:8080"
-        var apiKey: String     // empty = no auth header
-        var model: String      // e.g. "qwen2.5-1.5b-instruct" or left empty for llama-server default
+        var baseURL: String
+        var apiKey: String
+        var model: String
         var maxTokens: Int
         var temperature: Double
 
-        static let localLlamaServer = Config(
-            baseURL: "http://127.0.0.1:8080",
-            apiKey: "",
-            model: "",
-            maxTokens: 300,
-            temperature: 0.3
-        )
-
-        static let ollama = Config(
-            baseURL: "http://127.0.0.1:11434/v1",
-            apiKey: "ollama",
-            model: "qwen2.5:1.5b",
-            maxTokens: 300,
-            temperature: 0.3
-        )
+        static func from(service: RemoteService) -> Config {
+            Config(
+                baseURL: service.baseURL,
+                apiKey: service.apiKey,
+                model: service.modelName,
+                maxTokens: 300,
+                temperature: 0.3
+            )
+        }
     }
 
     private var config: Config
     private let session: URLSession
 
-    var isLoaded: Bool {
-        // For HTTP mode, "loaded" means the endpoint is reachable.
-        // We do a lazy check — return true and let inference fail gracefully if not.
-        true
-    }
-
-    init(config: Config = .localLlamaServer) {
+    init(config: Config = Config(baseURL: "http://127.0.0.1:8080", apiKey: "", model: "", maxTokens: 300, temperature: 0.3)) {
         self.config = config
         let sessionConfig = URLSessionConfiguration.default
         sessionConfig.timeoutIntervalForRequest = 30
         self.session = URLSession(configuration: sessionConfig)
     }
 
+    deinit {
+        session.invalidateAndCancel()
+    }
+
     func updateConfig(_ newConfig: Config) {
         config = newConfig
+    }
+
+    // MARK: - URL construction
+
+    // OpenAI-compatible convention:
+    //   baseURL without /v1 suffix → append /v1/chat/completions
+    //   baseURL with    /v1 suffix → strip it first, then append (avoids double /v1)
+    private func endpoint(_ path: String) -> URL? {
+        let base = config.baseURL.trimmingCharacters(in: .init(charactersIn: "/"))
+        let baseWithoutV1 = base.hasSuffix("/v1") ? String(base.dropLast(3)) : base
+        return URL(string: baseWithoutV1 + "/v1" + path)
     }
 
     // MARK: - Inference
 
     func convert(text: String, systemPrompt: String, maxTokens: Int? = nil) async throws -> String {
-        let url = URL(string: config.baseURL.trimmingCharacters(in: .init(charactersIn: "/")) + "/v1/chat/completions")!
+        guard let url = endpoint("/chat/completions") else {
+            throw LLMError.invalidURL
+        }
 
         let body: [String: Any] = [
             "model": config.model,
@@ -83,14 +81,14 @@ actor LlamaEngine {
 
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             let status = (response as? HTTPURLResponse)?.statusCode ?? -1
-            throw LlamaError.httpError(status)
+            throw LLMError.httpError(status)
         }
 
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let choices = json["choices"] as? [[String: Any]],
               let message = choices.first?["message"] as? [String: Any],
               let content = message["content"] as? String else {
-            throw LlamaError.invalidResponse
+            throw LLMError.invalidResponse
         }
 
         return content.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -99,14 +97,20 @@ actor LlamaEngine {
     // MARK: - Health check
 
     func checkAvailability() async -> Bool {
-        guard let url = URL(string: config.baseURL + "/health") else { return false }
+        guard let url = endpoint("/models") else { return false }
         var req = URLRequest(url: url)
-        req.timeoutInterval = 3
-        return (try? await session.data(for: req)) != nil
+        req.timeoutInterval = 5
+        if !config.apiKey.isEmpty {
+            req.setValue("Bearer \(config.apiKey)", forHTTPHeaderField: "Authorization")
+        }
+        guard let (_, response) = try? await session.data(for: req),
+              let http = response as? HTTPURLResponse else { return false }
+        return (200...299).contains(http.statusCode)
     }
 
-    enum LlamaError: Error {
+    enum LLMError: Error {
         case httpError(Int)
         case invalidResponse
+        case invalidURL
     }
 }

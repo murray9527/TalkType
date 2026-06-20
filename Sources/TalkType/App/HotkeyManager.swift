@@ -1,25 +1,32 @@
 import Carbon
 import AppKit
 
-// Listens for the global push-to-talk hotkey (default: Option+Space).
-// Uses Carbon EventHotKey API which works without Accessibility permission.
+@MainActor
 final class HotkeyManager {
     var onKeyDown: (() -> Void)?
     var onKeyUp: (() -> Void)?
 
-    private var hotKeyRef: EventHotKeyRef?
-    private var eventHandlerRef: EventHandlerRef?
+    nonisolated(unsafe) private var hotKeyRef: EventHotKeyRef?
+    nonisolated(unsafe) private var eventHandlerRef: EventHandlerRef?
+    private var currentKeyCode: UInt32
+    private var currentModifiers: UInt32
 
-    // Default: Option (⌥) + Space
-    private let keyCode: UInt32 = UInt32(kVK_Space)
-    private let modifiers: UInt32 = UInt32(optionKey)
-
-    init() {
+    init(keyCode: Int = 0x3F, modifiers: Int = 0) {
+        self.currentKeyCode = UInt32(keyCode)
+        self.currentModifiers = UInt32(modifiers)
         register()
     }
 
     deinit {
+        if let ref = hotKeyRef { UnregisterEventHotKey(ref) }
+        if let ref = eventHandlerRef { RemoveEventHandler(ref) }
+    }
+
+    func reregister(keyCode: Int, modifiers: Int) {
         unregister()
+        currentKeyCode = UInt32(keyCode)
+        currentModifiers = UInt32(modifiers)
+        register()
     }
 
     private func register() {
@@ -39,10 +46,12 @@ final class HotkeyManager {
                 GetEventParameter(event, UInt32(kEventParamDirectObject), UInt32(typeEventHotKeyID), nil,
                                   MemoryLayout<EventHotKeyID>.size, nil, &hotKeyID)
                 let kind = GetEventKind(event)
-                if kind == kEventHotKeyPressed {
-                    manager.onKeyDown?()
-                } else if kind == kEventHotKeyReleased {
-                    manager.onKeyUp?()
+                Task { @MainActor in
+                    if kind == kEventHotKeyPressed {
+                        manager.onKeyDown?()
+                    } else if kind == kEventHotKeyReleased {
+                        manager.onKeyUp?()
+                    }
                 }
                 return noErr
             },
@@ -52,12 +61,12 @@ final class HotkeyManager {
             &eventHandlerRef
         )
 
-        RegisterEventHotKey(keyCode, modifiers, hotKeyID, GetApplicationEventTarget(), 0, &hotKeyRef)
+        RegisterEventHotKey(currentKeyCode, currentModifiers, hotKeyID, GetApplicationEventTarget(), 0, &hotKeyRef)
     }
 
     private func unregister() {
-        if let ref = hotKeyRef { UnregisterEventHotKey(ref) }
-        if let ref = eventHandlerRef { RemoveEventHandler(ref) }
+        if let ref = hotKeyRef { UnregisterEventHotKey(ref); hotKeyRef = nil }
+        if let ref = eventHandlerRef { RemoveEventHandler(ref); eventHandlerRef = nil }
     }
 }
 
