@@ -96,10 +96,10 @@ final class AppSettings: ObservableObject {
 
     // MARK: - Hotkey
 
-    @Published var hotkeyKeyCode: Int = 0x3F {
+    @Published var hotkeyKeyCode: Int = 49 {  // kVK_Space
         didSet { UserDefaults.standard.set(hotkeyKeyCode, forKey: "hotkeyKeyCode") }
     }
-    @Published var hotkeyModifiers: Int = 0 {
+    @Published var hotkeyModifiers: Int = 2048 {  // optionKey
         didSet { UserDefaults.standard.set(hotkeyModifiers, forKey: "hotkeyModifiers") }
     }
 
