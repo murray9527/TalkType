@@ -53,19 +53,15 @@ TalkType 的核心理念是**模型无关**——你可以自由选择 ASR 识�
 ---
 
 ## 截图
-
-<!-- TODO: 添加应用截图 GIF/PNG -->
+<img width="600" height="193" alt="image" src="https://github.com/user-attachments/assets/25d09feb-11fd-45ec-a94a-4d88266f508e" />
 <img width="560" height="572" alt="image" src="https://github.com/user-attachments/assets/25482f4e-da2e-4079-9331-481aab66bb59" />
 <img width="1200" height="812" alt="image" src="https://github.com/user-attachments/assets/19b83554-a13a-4869-abad-2568967e5dbb" />
-
----
 
 ## 安装
 
 ### 下载 DMG（推荐）
 
 从 [Releases](../../releases) 下载对应架构的 DMG：
-<img width="600" height="193" alt="image" src="https://github.com/user-attachments/assets/25d09feb-11fd-45ec-a94a-4d88266f508e" />
 
 | 架构 | 文件 |
 |---|---|
