@@ -3,8 +3,8 @@ set -euo pipefail
 
 # ─────────────────────────────────────────────────────────
 # TalkType release build script
-# Produces TalkType-<arch>.app + TalkType-<arch>.dmg
-# Builds both arm64 and x86_64 on any host Mac
+# App bundle always named "TalkType.app"
+# DMG files named TalkType-<arch>.dmg
 # ─────────────────────────────────────────────────────────
 
 PRODUCT="TalkType"
@@ -12,6 +12,7 @@ SCHEME="release"
 ARCHS=("arm64" "x86_64")
 INFO_PLIST_SRC="Supporting/Info.plist"
 BUILD_ROOT=".build"
+APP_BUNDLE="${PRODUCT}.app"
 
 echo "============================================"
 echo " TalkType Release Build"
@@ -25,7 +26,6 @@ for ARCH in "${ARCHS[@]}"; do
     echo "────────────────────────────────────────────"
 
     BUILD_DIR="${BUILD_ROOT}/${ARCH}-apple-macosx/${SCHEME}"
-    APP_BUNDLE="${PRODUCT}-${ARCH}.app"
     DMG_NAME="${PRODUCT}-${ARCH}.dmg"
 
     # Build
@@ -36,7 +36,7 @@ for ARCH in "${ARCHS[@]}"; do
         exit 1
     fi
 
-    echo "==> Packaging ${APP_BUNDLE}…"
+    echo "==> Packaging ${APP_BUNDLE} (${ARCH})…"
     rm -rf "${APP_BUNDLE}"
     mkdir -p "${APP_BUNDLE}/Contents/MacOS"
     mkdir -p "${APP_BUNDLE}/Contents/Resources"
@@ -44,7 +44,6 @@ for ARCH in "${ARCHS[@]}"; do
     cp "${BUILD_DIR}/${PRODUCT}" "${APP_BUNDLE}/Contents/MacOS/"
     cp "${INFO_PLIST_SRC}" "${APP_BUNDLE}/Contents/"
 
-    # Copy GRDB privacy bundle if exists
     if [ -d "${BUILD_DIR}/GRDB_GRDB.bundle" ]; then
         cp -R "${BUILD_DIR}/GRDB_GRDB.bundle" "${APP_BUNDLE}/Contents/Resources/"
     fi
@@ -59,12 +58,13 @@ for ARCH in "${ARCHS[@]}"; do
     echo "✅ ${DMG_NAME} ($(du -h "${DMG_NAME}" | cut -f1))"
 done
 
+# Clean up the last .app bundle
+rm -rf "${APP_BUNDLE}"
+
 echo ""
 echo "============================================"
 echo " Done!"
-echo ""
 for ARCH in "${ARCHS[@]}"; do
-    echo "   ${PRODUCT}-${ARCH}.app"
     echo "   ${PRODUCT}-${ARCH}.dmg"
 done
 echo "============================================"
