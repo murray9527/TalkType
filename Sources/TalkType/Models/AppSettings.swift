@@ -5,13 +5,27 @@ import SwiftUI
 final class AppSettings: ObservableObject {
     static let shared = AppSettings()
 
+    // MARK: - Operation mode
+
+    @Published var operationModeRaw: String = OperationMode.custom.rawValue {
+        didSet { UserDefaults.standard.set(operationModeRaw, forKey: "operationMode") }
+    }
+    var operationMode: OperationMode {
+        get { OperationMode(rawValue: operationModeRaw) ?? .custom }
+        set { operationModeRaw = newValue.rawValue }
+    }
+
     // MARK: - Advanced features
 
-    @AppStorage("advancedEnabled") var advancedEnabled: Bool = false
+    @Published var advancedEnabled: Bool = false {
+        didSet { UserDefaults.standard.set(advancedEnabled, forKey: "advancedEnabled") }
+    }
 
     // MARK: - Voice model source
 
-    @AppStorage("voiceModelSourceRaw") var voiceModelSourceRaw: String = VoiceModelSource.remote.rawValue
+    @Published var voiceModelSourceRaw: String = VoiceModelSource.remote.rawValue {
+        didSet { UserDefaults.standard.set(voiceModelSourceRaw, forKey: "voiceModelSourceRaw") }
+    }
     var voiceModelSource: VoiceModelSource {
         get { VoiceModelSource(rawValue: voiceModelSourceRaw) ?? .remote }
         set { voiceModelSourceRaw = newValue.rawValue }
@@ -19,7 +33,9 @@ final class AppSettings: ObservableObject {
 
     // MARK: - Refinement model source
 
-    @AppStorage("refinementModelSourceRaw") var refinementModelSourceRaw: String = RefinementModelSource.remote.rawValue
+    @Published var refinementModelSourceRaw: String = RefinementModelSource.remote.rawValue {
+        didSet { UserDefaults.standard.set(refinementModelSourceRaw, forKey: "refinementModelSourceRaw") }
+    }
     var refinementModelSource: RefinementModelSource {
         get { RefinementModelSource(rawValue: refinementModelSourceRaw) ?? .remote }
         set { refinementModelSourceRaw = newValue.rawValue }
@@ -27,12 +43,18 @@ final class AppSettings: ObservableObject {
 
     // MARK: - Active remote service IDs
 
-    @AppStorage("activeRemoteASRID") var activeRemoteASRID: String = ""
-    @AppStorage("activeRemoteLLMID") var activeRemoteLLMID: String = ""
+    @Published var activeRemoteASRID: String = "" {
+        didSet { UserDefaults.standard.set(activeRemoteASRID, forKey: "activeRemoteASRID") }
+    }
+    @Published var activeRemoteLLMID: String = "" {
+        didSet { UserDefaults.standard.set(activeRemoteLLMID, forKey: "activeRemoteLLMID") }
+    }
 
     // MARK: - Local Whisper
 
-    @AppStorage("whisperModelPath") var whisperModelPath: String = ""
+    @Published var whisperModelPath: String = "" {
+        didSet { UserDefaults.standard.set(whisperModelPath, forKey: "whisperModelPath") }
+    }
 
     var resolvedWhisperModelPath: String {
         if !whisperModelPath.isEmpty { return whisperModelPath }
@@ -42,8 +64,12 @@ final class AppSettings: ObservableObject {
 
     // MARK: - Tone & language
 
-    @AppStorage("toneStyle") var toneStyleRaw: String = ToneStyle.none.rawValue
-    @AppStorage("language") var language: String = "zh"
+    @Published var toneStyleRaw: String = ToneStyle.none.rawValue {
+        didSet { UserDefaults.standard.set(toneStyleRaw, forKey: "toneStyle") }
+    }
+    @Published var language: String = "zh" {
+        didSet { UserDefaults.standard.set(language, forKey: "language") }
+    }
 
     var toneStyle: ToneStyle {
         get { ToneStyle(rawValue: toneStyleRaw) ?? .none }
@@ -52,26 +78,38 @@ final class AppSettings: ObservableObject {
 
     // MARK: - Recording
 
-    @AppStorage("maxRecordingDuration") var maxRecordingDuration: Double = 60
+    @Published var maxRecordingDuration: Double = 60 {
+        didSet { UserDefaults.standard.set(maxRecordingDuration, forKey: "maxRecordingDuration") }
+    }
 
     // MARK: - Text optimization
 
     /// Master toggle for LLM-based text optimization after ASR.
-    @AppStorage("textOptimizationEnabled") var textOptimizationEnabled: Bool = false
+    @Published var textOptimizationEnabled: Bool = false {
+        didSet { UserDefaults.standard.set(textOptimizationEnabled, forKey: "textOptimizationEnabled") }
+    }
 
     /// When enabled, ASR emotion data is passed to the LLM optimization prompt.
-    @AppStorage("emotionAwareEnabled") var emotionAwareEnabled: Bool = true
+    @Published var emotionAwareEnabled: Bool = true {
+        didSet { UserDefaults.standard.set(emotionAwareEnabled, forKey: "emotionAwareEnabled") }
+    }
 
     // MARK: - Hotkey
 
-    @AppStorage("hotkeyKeyCode") var hotkeyKeyCode: Int = 0x3F  // kVK_Function
-    @AppStorage("hotkeyModifiers") var hotkeyModifiers: Int = 0
+    @Published var hotkeyKeyCode: Int = 0x3F {
+        didSet { UserDefaults.standard.set(hotkeyKeyCode, forKey: "hotkeyKeyCode") }
+    }
+    @Published var hotkeyModifiers: Int = 0 {
+        didSet { UserDefaults.standard.set(hotkeyModifiers, forKey: "hotkeyModifiers") }
+    }
 
     // MARK: - Edit before insert
 
     /// When enabled, shows an editable popup after recognition (phase 3).
     /// When disabled, inserts text directly after recognition.
-    @AppStorage("enableReedit") var enableReedit: Bool = false
+    @Published var enableReedit: Bool = false {
+        didSet { UserDefaults.standard.set(enableReedit, forKey: "enableReedit") }
+    }
 
     // MARK: - Legacy LLM fields (kept for migration)
 
@@ -109,6 +147,10 @@ final class AppSettings: ObservableObject {
             activeRemoteLLMID = service.id
         }
 
+        // Migrate old per-component .subscription to .remote (now a top-level mode)
+        if voiceModelSourceRaw == "subscription" { voiceModelSource = .remote }
+        if refinementModelSourceRaw == "subscription" { refinementModelSource = .remote }
+
         // Default ASR source is remote (Aliyun preset)
         voiceModelSourceRaw = VoiceModelSource.remote.rawValue
         // Auto-select Aliyun Qwen-ASR preset if no active remote ASR is set
@@ -122,6 +164,26 @@ final class AppSettings: ObservableObject {
     // MARK: - Init
 
     private init() {
+        // Load persisted values
+        let defaults = UserDefaults.standard
+        operationModeRaw = defaults.string(forKey: "operationMode") ?? OperationMode.custom.rawValue
+        advancedEnabled = defaults.bool(forKey: "advancedEnabled")
+        voiceModelSourceRaw = defaults.string(forKey: "voiceModelSourceRaw") ?? VoiceModelSource.remote.rawValue
+        refinementModelSourceRaw = defaults.string(forKey: "refinementModelSourceRaw") ?? RefinementModelSource.remote.rawValue
+        activeRemoteASRID = defaults.string(forKey: "activeRemoteASRID") ?? ""
+        activeRemoteLLMID = defaults.string(forKey: "activeRemoteLLMID") ?? ""
+        whisperModelPath = defaults.string(forKey: "whisperModelPath") ?? ""
+        toneStyleRaw = defaults.string(forKey: "toneStyle") ?? ToneStyle.none.rawValue
+        language = defaults.string(forKey: "language") ?? "zh"
+        maxRecordingDuration = defaults.double(forKey: "maxRecordingDuration")
+        if maxRecordingDuration == 0 { maxRecordingDuration = 60 }
+        textOptimizationEnabled = defaults.bool(forKey: "textOptimizationEnabled")
+        emotionAwareEnabled = defaults.bool(forKey: "emotionAwareEnabled")
+        hotkeyKeyCode = defaults.integer(forKey: "hotkeyKeyCode")
+        if hotkeyKeyCode == 0 { hotkeyKeyCode = 0x3F }
+        hotkeyModifiers = defaults.integer(forKey: "hotkeyModifiers")
+        enableReedit = defaults.bool(forKey: "enableReedit")
+
         migrateIfNeeded()
     }
 
@@ -148,30 +210,41 @@ final class AppSettings: ObservableObject {
 
 // MARK: - Enums
 
+enum OperationMode: String, CaseIterable, Identifiable {
+    case subscription, custom
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .subscription: return "订阅模式"
+        case .custom: return "自定义模式"
+        }
+    }
+}
+
 enum VoiceModelSource: String, CaseIterable, Identifiable {
-    case local, remote, subscription
+    case local, remote
 
     var id: String { rawValue }
 
     var displayName: String {
         switch self {
         case .local: return "本地模型"
-        case .remote: return "自定义接口"
-        case .subscription: return "官方订阅"
+        case .remote: return "远端模型"
         }
     }
 }
 
 enum RefinementModelSource: String, CaseIterable, Identifiable {
-    case local, remote, subscription
+    case local, remote
 
     var id: String { rawValue }
 
     var displayName: String {
         switch self {
         case .local: return "本地模型"
-        case .remote: return "自定义接口"
-        case .subscription: return "官方订阅"
+        case .remote: return "远端模型"
         }
     }
 }

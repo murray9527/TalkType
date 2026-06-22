@@ -53,6 +53,9 @@ final class PopupState: ObservableObject {
     @Published var roastText: String? = nil
     @Published var isRoasting: Bool = false
 
+    // Transient error banner
+    @Published var errorMessage: String? = nil
+
     var onConfirm: (String) -> Void
     var onCancel: () -> Void
     var onReoptimize: ((String) -> Void)? = nil
@@ -214,39 +217,35 @@ final class PopupWindowController {
 
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, let ps = self.popupState, self.isVisible else { return event }
-            if event.keyCode == 36, ps.dictationState == .ready {
-                let cmd = event.modifierFlags.contains(.command)
-                let shift = event.modifierFlags.contains(.shift)
-                if cmd && shift {
-                    ps.onConfirm(ps.text)                              // ⇧⌘↵ — insert original
-                    return nil
-                }
-                if cmd {
-                    let text = (ps.styledText?.isEmpty == false) ? ps.styledText! : ps.text
-                    ps.onConfirm(text)                                 // ⌘↵ — insert optimized
-                    return nil
-                }
-            }
             if event.keyCode == 53 {
                 ps.onCancel()
                 return nil
+            }
+            if ps.dictationState == .ready, event.modifierFlags.contains(.command) {
+                if event.keyCode == 126 {
+                    ps.onConfirm(ps.text)                              // ⌘↑ — insert original
+                    return nil
+                }
+                if event.keyCode == 125 {
+                    let text = (ps.styledText?.isEmpty == false) ? ps.styledText! : ps.text
+                    ps.onConfirm(text)                                 // ⌘↓ — insert optimized
+                    return nil
+                }
             }
             return event
         }
 
         globalKeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, let ps = self.popupState, self.isVisible else { return }
-            if event.keyCode == 53 { // Escape — cancel from any state
+            if event.keyCode == 53 {
                 DispatchQueue.main.async { ps.onCancel() }
-            } else if event.keyCode == 36, ps.dictationState == .ready {
-                let cmd = event.modifierFlags.contains(.command)
-                let shift = event.modifierFlags.contains(.shift)
+            } else if ps.dictationState == .ready, event.modifierFlags.contains(.command) {
                 DispatchQueue.main.async {
-                    if cmd && shift {
-                        ps.onConfirm(ps.text)                              // ⇧⌘↵ — insert original
-                    } else if cmd {
+                    if event.keyCode == 126 {
+                        ps.onConfirm(ps.text)                              // ⌘↑ — insert original
+                    } else if event.keyCode == 125 {
                         let text = (ps.styledText?.isEmpty == false) ? ps.styledText! : ps.text
-                        ps.onConfirm(text)                                 // ⌘↵ — insert optimized
+                        ps.onConfirm(text)                                 // ⌘↓ — insert optimized
                     }
                 }
             }

@@ -4,19 +4,71 @@ struct PreferencesView: View {
     @ObservedObject private var settings = AppSettings.shared
 
     var body: some View {
+        TabView {
+            generalTab
+                .tabItem { Label("一般设置", systemImage: "gearshape") }
+
+            modelTab
+                .tabItem { Label("模型设置", systemImage: "waveform") }
+        }
+        .frame(width: 560, height: 520)
+    }
+
+    // MARK: - General Tab
+
+    @ViewBuilder
+    private var generalTab: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                asrSection
-                hotwordsSection
                 hotkeySection
+                hotwordsSection
                 optimizationSection
-                if settings.textOptimizationEnabled {
-                    llmSection
-                }
             }
             .padding()
         }
-        .frame(width: 560, height: 520)
+    }
+
+    // MARK: - Model Tab
+
+    @ViewBuilder
+    private var modelTab: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                // 订阅状态提示（暂未开放）
+                subscriptionStatusBar
+                customModelContent
+            }
+            .padding()
+        }
+    }
+
+    private var subscriptionStatusBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "crown.fill")
+                .foregroundColor(.orange)
+                .font(.system(size: 13))
+            Text("订阅模式")
+                .font(.subheadline)
+            Spacer()
+            Text("暂未开放")
+                .font(.caption)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 2)
+                .background(Color.secondary.opacity(0.12), in: Capsule())
+            Text("敬请期待")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+        }
+        .padding(10)
+        .background(Color.orange.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    // MARK: - Custom Mode Content
+
+    @ViewBuilder
+    private var customModelContent: some View {
+        asrSection
+        llmSection
     }
 
     // MARK: - ASR Section
@@ -48,8 +100,6 @@ struct PreferencesView: View {
                     ASRLocalContent()
                 case .remote:
                     ASRRemoteContent()
-                case .subscription:
-                    SubscriptionRow()
                 }
             }
             .padding(8)
@@ -119,30 +169,7 @@ struct PreferencesView: View {
                 Label("语气转换（LLM）", systemImage: "bubble.left.and.text.bubble.right")
                     .font(.headline)
 
-                Picker("转换来源", selection: $settings.refinementModelSourceRaw) {
-                    ForEach(RefinementModelSource.allCases) { source in
-                        Text(source.displayName).tag(source.rawValue)
-                    }
-                }
-                .pickerStyle(.segmented)
-
-                switch settings.refinementModelSource {
-                case .local:
-                    VStack(spacing: 8) {
-                        Image(systemName: "tray.full")
-                            .font(.title2).foregroundColor(.secondary)
-                        Text("当前版本暂不支持本地语气转换模型")
-                            .font(.subheadline).foregroundColor(.secondary)
-                        Text("请选择「自定义接口」以接入云端或自部署的 LLM 服务")
-                            .font(.caption).foregroundStyle(.tertiary)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 16)
-                case .remote:
-                    LLMServiceList()
-                case .subscription:
-                    SubscriptionPlaceholder()
-                }
+                LLMServiceList()
             }
             .padding(8)
         }
@@ -156,6 +183,8 @@ struct PreferencesView: View {
         )
     }
 }
+
+// MARK: - Whisper Model Row
 
 private struct WhisperModelRow: View {
     let model: WhisperModelInfo
@@ -234,7 +263,10 @@ private struct ASRLocalContent: View {
     @ObservedObject private var settings = AppSettings.shared
     @ObservedObject private var downloadManager = ModelDownloadManager.shared
 
-    private var activeModelID: String {
+    /// 返回显式激活的模型 ID。whisperModelPath 为空时返回 nil，
+    /// 避免 resolvedWhisperModelPath 的默认 fallback (ggml-small.bin) 导致误判。
+    private var activeModelID: String? {
+        guard !settings.whisperModelPath.isEmpty else { return nil }
         let path = settings.resolvedWhisperModelPath
         return WhisperModelInfo.all.first { path.hasSuffix($0.fileName) }?.id ?? "custom"
     }
@@ -259,6 +291,8 @@ private struct ASRLocalContent: View {
                     model: model,
                     isActive: settings.voiceModelSource == .local && activeModelID == model.id,
                     onActivate: {
+                        // 互斥：清除远程 ASR 激活状态
+                        settings.activeRemoteASRID = ""
                         settings.whisperModelPath = model.localPath.path
                         settings.voiceModelSource = .local
                     }
@@ -311,6 +345,8 @@ private struct ASRLocalContent: View {
                 try FileManager.default.removeItem(at: dest)
             }
             try FileManager.default.copyItem(at: src, to: dest)
+            // 互斥：清除远程 ASR 激活状态
+            settings.activeRemoteASRID = ""
             settings.whisperModelPath = dest.path
             settings.voiceModelSource = .local
         } catch {
@@ -324,47 +360,158 @@ private struct ASRLocalContent: View {
 private struct ASRRemoteContent: View {
     @ObservedObject private var store = RemoteServiceStore.shared
     @ObservedObject private var settings = AppSettings.shared
-    @State private var showingAddSheet = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            ForEach(store.asrServices) { service in
+            ForEach(store.asrServices.filter(\.isPreset)) { service in
                 ASRServiceRow(
                     service: service,
                     isActive: settings.voiceModelSource == .remote && settings.activeRemoteASRID == service.id,
                     onActivate: {
+                        // 互斥：清除本地模型激活状态
+                        settings.whisperModelPath = ""
                         settings.activeRemoteASRID = service.id
                         settings.voiceModelSource = .remote
                     }
                 )
-                if service.id != store.asrServices.last?.id {
-                    Divider()
-                }
+                Divider()
             }
 
-            HStack {
-                Button {
-                    showingAddSheet = true
-                } label: {
-                    Label("添加自定义服务…", systemImage: "plus.circle")
-                        .font(.caption)
-                }
-                .buttonStyle(.plain)
-                .foregroundColor(.accentColor)
-
-                Spacer()
-
-                Text("支持 WebSocket 实时语音识别接口")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-            }
-            .padding(.top, 4)
-        }
-        .sheet(isPresented: $showingAddSheet) {
-            AddASRServiceSheet()
+            Divider()
+            ASRCustomServiceView()
         }
     }
 }
+
+// MARK: - ASR Custom Service View
+
+private struct ASRCustomServiceView: View {
+    @ObservedObject private var store = RemoteServiceStore.shared
+    @ObservedObject private var settings = AppSettings.shared
+    @State private var baseURL = ""
+    @State private var apiKey = ""
+    @State private var modelName = ""
+    @State private var isActivating = false
+
+    private var existingCustom: RemoteService? {
+        store.asrServices.first { !$0.isPreset }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                Image(systemName: isActive ? "largecircle.fill.circle" : "circle")
+                    .foregroundColor(isActive ? .accentColor : Color(nsColor: .tertiaryLabelColor))
+                    .font(.system(size: 14))
+
+                Text("自定义 ASR 服务")
+                    .font(.subheadline).bold()
+
+                Spacer()
+
+                if isActive {
+                    Text("使用中").font(.caption).foregroundColor(.secondary)
+                } else if isActivating {
+                    ProgressView().scaleEffect(0.5).frame(height: 10)
+                } else {
+                    Button("启用") { activate() }
+                        .buttonStyle(.borderedProminent).controlSize(.small)
+                        .disabled(existingCustom == nil && baseURL.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+
+            HStack(spacing: 6) {
+                Text("地址").font(.caption).foregroundColor(.secondary).frame(width: 55, alignment: .trailing)
+                TextField("wss://api.example.com/v1", text: $baseURL)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.caption)
+                    .onChange(of: baseURL) { _ in saveIfNeeded() }
+            }
+
+            HStack(spacing: 6) {
+                Text("API Key").font(.caption).foregroundColor(.secondary).frame(width: 55, alignment: .trailing)
+                SecureField("API Key", text: $apiKey)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.caption)
+                    .onChange(of: apiKey) { _ in saveIfNeeded() }
+            }
+
+            HStack(spacing: 6) {
+                Text("模型").font(.caption).foregroundColor(.secondary).frame(width: 55, alignment: .trailing)
+                TextField("模型名称", text: $modelName)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.caption)
+                    .onChange(of: modelName) { _ in saveIfNeeded() }
+            }
+        }
+        .padding(.vertical, 4)
+        .onAppear {
+            if let custom = existingCustom {
+                baseURL = custom.baseURL
+                apiKey = custom.apiKey
+                modelName = custom.modelName
+            }
+        }
+        .onChange(of: store.asrServices.count) { _ in
+            if let custom = existingCustom {
+                if baseURL.isEmpty { baseURL = custom.baseURL }
+                if apiKey.isEmpty { apiKey = custom.apiKey }
+                if modelName.isEmpty { modelName = custom.modelName }
+            }
+        }
+    }
+
+    private var isActive: Bool {
+        guard let custom = existingCustom else { return false }
+        return settings.voiceModelSource == .remote && settings.activeRemoteASRID == custom.id
+    }
+
+    private func saveIfNeeded() {
+        guard let custom = existingCustom,
+              baseURL != custom.baseURL || apiKey != custom.apiKey || modelName != custom.modelName
+        else { return }
+        var updated = custom
+        updated.baseURL = baseURL
+        updated.apiKey = apiKey
+        updated.modelName = modelName
+        store.updateService(updated)
+    }
+
+    private func activate() {
+        isActivating = true
+        saveIfNeeded()
+
+        if let custom = existingCustom {
+            settings.whisperModelPath = ""
+            settings.activeRemoteASRID = custom.id
+            settings.voiceModelSource = .remote
+            isActivating = false
+            return
+        }
+
+        guard !baseURL.isEmpty else {
+            isActivating = false
+            return
+        }
+
+        let service = RemoteService(
+            id: UUID().uuidString,
+            name: "自定义 ASR",
+            type: .asr,
+            baseURL: baseURL,
+            apiKey: apiKey,
+            modelName: modelName.isEmpty ? "custom" : modelName,
+            isPreset: false
+        )
+        store.addService(service)
+        settings.whisperModelPath = ""
+        settings.activeRemoteASRID = service.id
+        settings.voiceModelSource = .remote
+        isActivating = false
+    }
+}
+
+// MARK: - ASR Service Row
 
 private struct ASRServiceRow: View {
     let service: RemoteService
@@ -383,12 +530,10 @@ private struct ASRServiceRow: View {
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
                         Text(service.name).font(.subheadline).bold()
-                        if service.isPreset {
-                            Text("预设").font(.caption2)
-                                .padding(.horizontal, 5).padding(.vertical, 1)
-                                .background(Color.secondary.opacity(0.15), in: Capsule())
-                                .foregroundColor(.secondary)
-                        }
+                        Text("预设").font(.caption2)
+                            .padding(.horizontal, 5).padding(.vertical, 1)
+                            .background(Color.secondary.opacity(0.15), in: Capsule())
+                            .foregroundColor(.secondary)
                     }
                     Text(service.baseURL)
                         .font(.caption2).foregroundColor(.secondary).lineLimit(1)
@@ -405,140 +550,24 @@ private struct ASRServiceRow: View {
                         Button("启用") { onActivate() }
                             .buttonStyle(.borderedProminent).controlSize(.small)
                     }
-                    if !service.isPreset {
-                        Button(role: .destructive) {
-                            store.deleteService(id: service.id)
-                        } label: {
-                            Text("删除").font(.caption2)
-                        }
-                        .buttonStyle(.plain)
-                    }
                 }
             }
 
-            // API key row
             HStack(spacing: 6) {
                 Text("API Key").font(.caption).foregroundColor(.secondary).frame(width: 55, alignment: .trailing)
-                SecureField(service.isPreset ? "填入你的 API Key" : "API Key", text: $localApiKey)
+                SecureField("API Key", text: $localApiKey)
                     .textFieldStyle(.roundedBorder)
                     .font(.caption)
-                Button("保存") {
-                    var updated = service
-                    updated.apiKey = localApiKey
-                    store.updateService(updated)
-                }
-                .buttonStyle(.bordered).controlSize(.small)
-                .font(.caption)
-                .disabled(localApiKey == service.apiKey)
+                    .onChange(of: localApiKey) { _ in
+                        guard localApiKey != service.apiKey else { return }
+                        var updated = service
+                        updated.apiKey = localApiKey
+                        store.updateService(updated)
+                    }
             }
         }
         .padding(.vertical, 4)
         .onAppear { localApiKey = service.apiKey }
-    }
-}
-
-private struct AddASRServiceSheet: View {
-    @ObservedObject private var store = RemoteServiceStore.shared
-    @ObservedObject private var settings = AppSettings.shared
-    @Environment(\.dismiss) private var dismiss
-
-    @State private var name = ""
-    @State private var baseURL = ""
-    @State private var modelName = ""
-    @State private var apiKey = ""
-
-    var body: some View {
-        VStack(spacing: 16) {
-            Text("添加自定义 ASR 服务")
-                .font(.headline)
-
-            Form {
-                TextField("名称（如 My ASR）", text: $name)
-                TextField("API 地址（如 wss://api.example.com/v1）", text: $baseURL)
-                TextField("模型名称", text: $modelName)
-                SecureField("API Key（可选）", text: $apiKey)
-            }
-            .formStyle(.grouped)
-
-            HStack {
-                Button("取消") { dismiss() }
-                    .keyboardShortcut(.cancelAction)
-                Spacer()
-                Button("添加") {
-                    let service = RemoteService(
-                        id: UUID().uuidString,
-                        name: name.isEmpty ? "自定义 ASR" : name,
-                        type: .asr,
-                        baseURL: baseURL,
-                        apiKey: apiKey,
-                        modelName: modelName,
-                        isPreset: false
-                    )
-                    store.addService(service)
-                    settings.activeRemoteASRID = service.id
-                    settings.voiceModelSource = .remote
-                    dismiss()
-                }
-                .buttonStyle(.borderedProminent)
-                .keyboardShortcut(.defaultAction)
-                .disabled(baseURL.isEmpty)
-            }
-        }
-        .padding()
-        .frame(width: 400, height: 280)
-    }
-}
-
-// MARK: - Subscription Placeholder
-
-private struct SubscriptionPlaceholder: View {
-    var body: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "sparkles.rectangle.stack")
-                .font(.title2).foregroundColor(.secondary)
-            Text("官方订阅服务即将推出")
-                .font(.subheadline).foregroundColor(.secondary)
-            Text("敬请期待")
-                .font(.caption).foregroundStyle(.tertiary)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 20)
-    }
-}
-
-private struct SubscriptionRow: View {
-    @ObservedObject private var settings = AppSettings.shared
-
-    var body: some View {
-        Button {
-            settings.voiceModelSource = .subscription
-        } label: {
-            HStack(spacing: 10) {
-                Image(systemName: settings.voiceModelSource == .subscription
-                    ? "largecircle.fill.circle" : "circle")
-                    .foregroundColor(settings.voiceModelSource == .subscription
-                        ? .accentColor : Color(nsColor: .tertiaryLabelColor))
-                    .font(.system(size: 14))
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("官方订阅服务").font(.subheadline).bold()
-                    Text("即将推出，敬请期待")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-
-                Spacer()
-
-                if settings.voiceModelSource == .subscription {
-                    Text("使用中").font(.caption).foregroundColor(.secondary)
-                } else {
-                    Text("敬请期待").font(.caption).foregroundColor(.secondary)
-                }
-            }
-            .padding(.vertical, 8)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
     }
 }
 
@@ -547,41 +576,20 @@ private struct SubscriptionRow: View {
 private struct LLMServiceList: View {
     @ObservedObject private var store = RemoteServiceStore.shared
     @ObservedObject private var settings = AppSettings.shared
-    @State private var showingAddSheet = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            ForEach(store.llmServices) { service in
+            ForEach(store.llmServices.filter(\.isPreset)) { service in
                 LLMServiceRow(
                     service: service,
                     isActive: settings.activeRemoteLLMID == service.id,
                     onActivate: { settings.activeRemoteLLMID = service.id }
                 )
-                if service.id != store.llmServices.last?.id {
-                    Divider()
-                }
+                Divider()
             }
 
-            HStack {
-                Button {
-                    showingAddSheet = true
-                } label: {
-                    Label("添加自定义服务…", systemImage: "plus.circle")
-                        .font(.caption)
-                }
-                .buttonStyle(.plain)
-                .foregroundColor(.accentColor)
-
-                Spacer()
-
-                Text("支持任何 OpenAI 兼容接口（Ollama、DeepSeek、阿里云等）")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-            }
-            .padding(.top, 4)
-        }
-        .sheet(isPresented: $showingAddSheet) {
-            AddLLMServiceSheet()
+            Divider()
+            LLMCustomServiceView()
         }
     }
 }
@@ -596,15 +604,11 @@ private struct LLMServiceRow: View {
     @State private var verifyState: VerifyState = .idle
 
     private enum VerifyState: Equatable {
-        case idle
-        case verifying
-        case success
-        case failed(String)
+        case idle, verifying, success, failed(String)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            // Header: icon, name, URL, actions
             HStack(spacing: 10) {
                 Image(systemName: isActive ? "largecircle.fill.circle" : "circle")
                     .foregroundColor(isActive ? .accentColor : Color(nsColor: .tertiaryLabelColor))
@@ -613,12 +617,10 @@ private struct LLMServiceRow: View {
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
                         Text(service.name).font(.subheadline).bold()
-                        if service.isPreset {
-                            Text("预设").font(.caption2)
-                                .padding(.horizontal, 5).padding(.vertical, 1)
-                                .background(Color.secondary.opacity(0.15), in: Capsule())
-                                .foregroundColor(.secondary)
-                        }
+                        Text("预设").font(.caption2)
+                            .padding(.horizontal, 5).padding(.vertical, 1)
+                            .background(Color.secondary.opacity(0.15), in: Capsule())
+                            .foregroundColor(.secondary)
                     }
                     Text(service.baseURL)
                         .font(.caption2).foregroundColor(.secondary).lineLimit(1)
@@ -633,49 +635,34 @@ private struct LLMServiceRow: View {
                         Button("启用") { onActivate() }
                             .buttonStyle(.borderedProminent).controlSize(.small)
                     }
-                    if !service.isPreset {
-                        Button(role: .destructive) {
-                            store.deleteService(id: service.id)
-                        } label: {
-                            Text("删除").font(.caption2)
-                        }
-                        .buttonStyle(.plain)
-                    }
                 }
             }
 
-            // API key row
             HStack(spacing: 6) {
                 Text("API Key").font(.caption).foregroundColor(.secondary).frame(width: 55, alignment: .trailing)
-                SecureField(service.isPreset ? "填入你的 API Key" : "API Key", text: $localApiKey)
+                SecureField("API Key", text: $localApiKey)
                     .textFieldStyle(.roundedBorder)
                     .font(.caption)
-                Button("保存") {
-                    var updated = service
-                    updated.apiKey = localApiKey
-                    store.updateService(updated)
-                }
-                .buttonStyle(.bordered).controlSize(.small)
-                .font(.caption)
-                .disabled(localApiKey == service.apiKey)
+                    .onChange(of: localApiKey) { _ in
+                        guard localApiKey != service.apiKey else { return }
+                        var updated = service
+                        updated.apiKey = localApiKey
+                        store.updateService(updated)
+                    }
             }
 
-            // Editable model name row
             HStack(spacing: 6) {
                 Text("模型").font(.caption).foregroundColor(.secondary).frame(width: 55, alignment: .trailing)
                 TextField("模型名称", text: $localModelName)
                     .textFieldStyle(.roundedBorder)
                     .font(.caption)
-                Button("保存") {
-                    var updated = service
-                    updated.modelName = localModelName
-                    store.updateService(updated)
-                }
-                .buttonStyle(.bordered).controlSize(.small)
-                .font(.caption)
-                .disabled(localModelName == service.modelName)
+                    .onChange(of: localModelName) { _ in
+                        guard localModelName != service.modelName else { return }
+                        var updated = service
+                        updated.modelName = localModelName
+                        store.updateService(updated)
+                    }
 
-                // Verify button
                 verifyControl
             }
         }
@@ -693,8 +680,7 @@ private struct LLMServiceRow: View {
             Button("验证") {
                 Task { await runVerification() }
             }
-            .buttonStyle(.bordered).controlSize(.small)
-            .font(.caption)
+            .buttonStyle(.bordered).controlSize(.small).font(.caption)
         case .verifying:
             HStack(spacing: 4) {
                 ProgressView().scaleEffect(0.5).frame(height: 10)
@@ -704,23 +690,18 @@ private struct LLMServiceRow: View {
             Image(systemName: "checkmark.circle.fill")
                 .foregroundColor(.green).font(.caption)
         case .failed(let msg):
-            Text(msg)
-                .font(.caption2).foregroundColor(.red)
-                .lineLimit(1)
+            Text(msg).font(.caption2).foregroundColor(.red).lineLimit(1)
         }
     }
 
     private func runVerification() async {
         verifyState = .verifying
-
-        // Save pending edits before verifying
         if localApiKey != service.apiKey || localModelName != service.modelName {
             var updated = service
             updated.apiKey = localApiKey
             updated.modelName = localModelName
             store.updateService(updated)
         }
-
         let config = LLMEngine.Config(
             baseURL: service.baseURL,
             apiKey: localApiKey,
@@ -730,65 +711,174 @@ private struct LLMServiceRow: View {
         )
         let engine = LLMEngine(config: config)
         let available = await engine.checkAvailability()
-
+        verifyState = available ? .success : .failed("连接失败")
         if available {
-            verifyState = .success
-            // Auto-reset after 1.5s
             try? await Task.sleep(nanoseconds: 1_500_000_000)
             verifyState = .idle
-        } else {
-            verifyState = .failed("连接失败")
         }
     }
 }
 
-private struct AddLLMServiceSheet: View {
+// MARK: - LLM Custom Service View
+
+private struct LLMCustomServiceView: View {
     @ObservedObject private var store = RemoteServiceStore.shared
     @ObservedObject private var settings = AppSettings.shared
-    @Environment(\.dismiss) private var dismiss
-
-    @State private var name = ""
     @State private var baseURL = ""
-    @State private var modelName = ""
     @State private var apiKey = ""
+    @State private var modelName = ""
+    @State private var isActivating = false
+    @State private var verifyState: VerifyState = .idle
+
+    private enum VerifyState: Equatable {
+        case idle, verifying, success, failed(String)
+    }
+
+    private var existingCustom: RemoteService? {
+        store.llmServices.first { !$0.isPreset }
+    }
 
     var body: some View {
-        VStack(spacing: 16) {
-            Text("添加自定义 LLM 服务")
-                .font(.headline)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                Image(systemName: isActive ? "largecircle.fill.circle" : "circle")
+                    .foregroundColor(isActive ? .accentColor : Color(nsColor: .tertiaryLabelColor))
+                    .font(.system(size: 14))
 
-            Form {
-                TextField("名称（如 My LLM）", text: $name)
-                TextField("API 地址（如 http://127.0.0.1:8080）", text: $baseURL)
-                TextField("如 qwen-flash、deepseek-v4-flash", text: $modelName)
-                SecureField("API Key（可选）", text: $apiKey)
-            }
-            .formStyle(.grouped)
+                Text("自定义 LLM 服务")
+                    .font(.subheadline).bold()
 
-            HStack {
-                Button("取消") { dismiss() }
-                    .keyboardShortcut(.cancelAction)
                 Spacer()
-                Button("添加") {
-                    let service = RemoteService(
-                        id: UUID().uuidString,
-                        name: name.isEmpty ? "自定义 LLM" : name,
-                        type: .llm,
-                        baseURL: baseURL,
-                        apiKey: apiKey,
-                        modelName: modelName,
-                        isPreset: false
-                    )
-                    store.addService(service)
-                    settings.activeRemoteLLMID = service.id
-                    dismiss()
+
+                if isActive {
+                    Text("使用中").font(.caption).foregroundColor(.secondary)
+                } else if isActivating {
+                    ProgressView().scaleEffect(0.5).frame(height: 10)
+                } else {
+                    Button("启用") { activate() }
+                        .buttonStyle(.borderedProminent).controlSize(.small)
+                        .disabled(existingCustom == nil && baseURL.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
-                .buttonStyle(.borderedProminent)
-                .keyboardShortcut(.defaultAction)
-                .disabled(baseURL.isEmpty)
+
+                verifyControl
+            }
+
+            HStack(spacing: 6) {
+                Text("地址").font(.caption).foregroundColor(.secondary).frame(width: 55, alignment: .trailing)
+                TextField("http://127.0.0.1:8080/v1", text: $baseURL)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.caption)
+                    .onChange(of: baseURL) { _ in saveIfNeeded() }
+            }
+
+            HStack(spacing: 6) {
+                Text("API Key").font(.caption).foregroundColor(.secondary).frame(width: 55, alignment: .trailing)
+                SecureField("API Key", text: $apiKey)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.caption)
+                    .onChange(of: apiKey) { _ in saveIfNeeded() }
+            }
+
+            HStack(spacing: 6) {
+                Text("模型").font(.caption).foregroundColor(.secondary).frame(width: 55, alignment: .trailing)
+                TextField("模型名称", text: $modelName)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.caption)
+                    .onChange(of: modelName) { _ in saveIfNeeded() }
             }
         }
-        .padding()
-        .frame(width: 400, height: 280)
+        .padding(.vertical, 4)
+        .onAppear {
+            if let custom = existingCustom {
+                baseURL = custom.baseURL
+                apiKey = custom.apiKey
+                modelName = custom.modelName
+            }
+        }
+    }
+
+    private var isActive: Bool {
+        guard let custom = existingCustom else { return false }
+        return settings.activeRemoteLLMID == custom.id
+    }
+
+    @ViewBuilder
+    private var verifyControl: some View {
+        switch verifyState {
+        case .idle:
+            Button("验证") {
+                Task { await runVerification() }
+            }
+            .buttonStyle(.bordered).controlSize(.small).font(.caption)
+        case .verifying:
+            HStack(spacing: 4) {
+                ProgressView().scaleEffect(0.5).frame(height: 10)
+                Text("验证中…").font(.caption2).foregroundColor(.secondary)
+            }
+        case .success:
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundColor(.green).font(.caption)
+        case .failed(let msg):
+            Text(msg).font(.caption2).foregroundColor(.red).lineLimit(1)
+        }
+    }
+
+    private func saveIfNeeded() {
+        guard let custom = existingCustom,
+              baseURL != custom.baseURL || apiKey != custom.apiKey || modelName != custom.modelName
+        else { return }
+        var updated = custom
+        updated.baseURL = baseURL
+        updated.apiKey = apiKey
+        updated.modelName = modelName
+        store.updateService(updated)
+    }
+
+    private func runVerification() async {
+        verifyState = .verifying
+        saveIfNeeded()
+        let config = LLMEngine.Config(
+            baseURL: baseURL,
+            apiKey: apiKey,
+            model: modelName,
+            maxTokens: 10,
+            temperature: 0.3
+        )
+        let engine = LLMEngine(config: config)
+        let ok = await engine.checkAvailability()
+        verifyState = ok ? .success : .failed("连接失败")
+        if ok {
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            verifyState = .idle
+        }
+    }
+
+    private func activate() {
+        isActivating = true
+        saveIfNeeded()
+
+        if let custom = existingCustom {
+            settings.activeRemoteLLMID = custom.id
+            isActivating = false
+            return
+        }
+
+        guard !baseURL.isEmpty else {
+            isActivating = false
+            return
+        }
+
+        let service = RemoteService(
+            id: UUID().uuidString,
+            name: "自定义 LLM",
+            type: .llm,
+            baseURL: baseURL,
+            apiKey: apiKey,
+            modelName: modelName.isEmpty ? "custom" : modelName,
+            isPreset: false
+        )
+        store.addService(service)
+        settings.activeRemoteLLMID = service.id
+        isActivating = false
     }
 }

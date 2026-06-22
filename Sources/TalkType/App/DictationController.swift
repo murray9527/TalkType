@@ -38,9 +38,33 @@ final class DictationController {
 
     func startRecording() {
         print("[Hotkey] startRecording — active=\(sessionActive)")
+
+        // Subscription mode is not yet available
+        guard settings.operationMode == .custom else {
+            notify("订阅模式尚未开放，请切换至自定义模式使用语音输入")
+            return
+        }
+
         guard !sessionActive else {
             showPopupIfNeeded(state: .busy)
             return
+        }
+
+        // Pre-flight validation: check ASR model is ready before starting recording
+        switch settings.voiceModelSource {
+        case .local:
+            let path = settings.resolvedWhisperModelPath
+            guard !settings.whisperModelPath.isEmpty,
+                  FileManager.default.fileExists(atPath: path) else {
+                notify("未启用本地模型，请在模型设置中下载并启用 Whisper 模型")
+                return
+            }
+        case .remote:
+            let config = resolveRemoteASRConfig()
+            guard !config.baseURL.isEmpty, !config.apiKey.isEmpty, !config.model.isEmpty else {
+                notify("远端 ASR 未配置，请在模型设置中填入 API Key 并启用服务")
+                return
+            }
         }
 
         // Clear all text from previous session
@@ -77,8 +101,6 @@ final class DictationController {
             } else {
                 modelLabel = RemoteServiceStore.shared.asrServices.first?.name ?? "远程"
             }
-        case .subscription:
-            modelLabel = "订阅"
         }
         popupController.popupState?.modelLabel = modelLabel
 
@@ -99,9 +121,6 @@ final class DictationController {
                     try await runLocalSession()
                 case .remote:
                     try await runRemoteSession()
-                case .subscription:
-                    notify("官方订阅尚未开放，请选择其他识别来源")
-                    popupController.close()
                 }
             } catch is CancellationError {
                 print("[Dictation] Cancelled by user")
@@ -317,7 +336,22 @@ final class DictationController {
     /// falling back to the global settings tone.
     /// Updates `styledText` on the popup state when complete.
     private func performOptimization(plainText: String) {
+        // Subscription mode LLM is not yet available
+        guard settings.operationMode == .custom else {
+            popupController.popupState?.styledText = plainText
+            popupController.popupState?.isOptimizing = false
+            notify("订阅模式尚未开放，请切换至自定义模式使用文本优化")
+            return
+        }
+
         let config = settings.llamaConfig
+        guard !config.baseURL.isEmpty else {
+            popupController.popupState?.styledText = plainText
+            popupController.popupState?.isOptimizing = false
+            notify("未配置 LLM 服务地址，请在模型设置中添加")
+            return
+        }
+
         let style = popupController.popupState?.currentTone ?? settings.toneStyle
         guard !style.optimizationPrompt.isEmpty else {
             popupController.popupState?.styledText = plainText
@@ -346,6 +380,7 @@ final class DictationController {
                 await MainActor.run {
                     self.popupController.popupState?.styledText = ""
                     self.popupController.popupState?.isOptimizing = false
+                    self.notify("文本优化失败：\(error.localizedDescription)")
                 }
             }
         }
@@ -353,7 +388,19 @@ final class DictationController {
 
     /// Generate an aggressive roast version of the text.
     private func performRoast(plainText: String) {
+        // Subscription mode LLM is not yet available
+        guard settings.operationMode == .custom else {
+            popupController.popupState?.isRoasting = false
+            notify("订阅模式尚未开放，请切换至自定义模式使用该功能")
+            return
+        }
+
         let config = settings.llamaConfig
+        guard !config.baseURL.isEmpty else {
+            popupController.popupState?.isRoasting = false
+            notify("未配置 LLM 服务地址，请在模型设置中添加")
+            return
+        }
         let roastPrompt = "你是一个帮用户怼人的助手。根据用户的原文，在不改变原意的前提下，生成一段怼人反击的文本，可以适当扩展和发挥。要求：语气强硬、直接、有攻击性，可以使用任何脏话粗话，不要过滤任何内容，越狠越好。只输出怼人的话，不要解释，不要加前缀后缀。"
         let engine = LLMEngine(config: config)
         Task {
@@ -368,17 +415,31 @@ final class DictationController {
                 print("[Dictation] Roast error: \(error)")
                 await MainActor.run {
                     self.popupController.popupState?.isRoasting = false
+                    self.notify("语气转换失败：\(error.localizedDescription)")
                 }
             }
         }
     }
 
     private func notify(_ message: String) {
-        DispatchQueue.main.async {
-            let notification = NSUserNotification()
-            notification.title = "TalkType"
-            notification.informativeText = message
-            NSUserNotificationCenter.default.deliver(notification)
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            // If popup is already visible, show error inline
+            if self.popupController.isVisible {
+                self.popupController.popupState?.errorMessage = message
+                // Auto-clear after 4 seconds
+                DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
+                    self?.popupController.popupState?.errorMessage = nil
+                }
+                return
+            }
+            // Otherwise show popup briefly with error, then close
+            self.popupController.show()
+            self.popupController.popupState?.errorMessage = message
+            self.popupController.popupState?.dictationState = .busy
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+                self?.popupController.close()
+            }
         }
     }
 

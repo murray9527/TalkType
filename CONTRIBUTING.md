@@ -4,7 +4,7 @@ Thanks for your interest in contributing!
 
 ## How to contribute
 
-1. **Bug report or feature request** — open a [GitHub Issue](https://github.com/YOUR_ACCOUNT/TalkType/issues/new)
+1. **Bug report or feature request** — open a [GitHub Issue](https://github.com/murray9527/TalkType/issues/new)
 2. **Code contribution** — fork the repo, create a branch, open a Pull Request
 
 ## Pull request process

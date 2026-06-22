@@ -96,6 +96,12 @@ struct DictationPopupView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            // Error banner — transient, auto-hides
+            if let error = state.errorMessage {
+                errorBanner(error)
+                layerDivider
+            }
+
             // Layer 1: Top status bar (always visible)
             topBar
 
@@ -125,6 +131,29 @@ struct DictationPopupView: View {
             RoundedRectangle(cornerRadius: 20)
                 .strokeBorder(Color.primary.opacity(0.12), lineWidth: 1)
         )
+    }
+
+    private func errorBanner(_ message: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundColor(.orange)
+                .font(.system(size: 12))
+            Text(message)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(.primary)
+            Spacer()
+            Button {
+                state.errorMessage = nil
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundColor(.secondary)
+                    .font(.system(size: 12))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(Color.orange.opacity(0.08))
     }
 
     private var layerDivider: some View {
@@ -255,7 +284,7 @@ private extension DictationPopupView {
                     .frame(minHeight: 100, maxHeight: 200)
 
                 if isReady {
-                    insertButton(action: { state.onConfirm(state.text) }, shortcutHint: "⇧⌘↩")
+                    insertButton(action: { state.onConfirm(state.text) }, shortcutHint: "⌘↑")
                 }
             }
         }
@@ -347,7 +376,7 @@ private extension DictationPopupView {
                     }
 
                     if isReady, let text = displayText, !text.isEmpty {
-                        insertButton(action: { state.onConfirm(text) }, shortcutHint: "⌘↩")
+                        insertButton(action: { state.onConfirm(text) }, shortcutHint: "⌘↓")
                     }
                 }
             }
