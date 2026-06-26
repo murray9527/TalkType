@@ -1,4 +1,6 @@
 import SwiftUI
+import AVFoundation
+import ApplicationServices
 
 struct PreferencesView: View {
     @ObservedObject private var settings = AppSettings.shared
@@ -20,6 +22,7 @@ struct PreferencesView: View {
     private var generalTab: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
+                permissionsSection
                 hotkeySection
                 hotwordsSection
                 optimizationSection
@@ -173,6 +176,58 @@ struct PreferencesView: View {
             }
             .padding(8)
         }
+    }
+
+    // MARK: - Permissions Section
+
+    @ViewBuilder
+    private var permissionsSection: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 12) {
+                Label("权限", systemImage: "lock.shield")
+                    .font(.headline)
+
+                PermissionRow(
+                    icon: "mic.fill",
+                    title: "麦克风权限",
+                    description: "用于语音录制和识别",
+                    isGranted: microphonePermissionGranted,
+                    onRequest: requestMicrophonePermission
+                )
+
+                Divider()
+
+                PermissionRow(
+                    icon: "keyboard",
+                    title: "辅助功能权限",
+                    description: "用于模拟键盘输入文字",
+                    isGranted: accessibilityPermissionGranted,
+                    onRequest: requestAccessibilityPermission
+                )
+            }
+            .padding(8)
+        }
+    }
+
+    private var microphonePermissionGranted: Bool {
+        let status = AVCaptureDevice.authorizationStatus(for: .audio)
+        return status == .authorized
+    }
+
+    private var accessibilityPermissionGranted: Bool {
+        AXIsProcessTrusted()
+    }
+
+    private func requestMicrophonePermission() {
+        AVCaptureDevice.requestAccess(for: .audio) { _ in }
+        if #available(macOS 14, *) {
+            AVAudioApplication.requestRecordPermission { _ in }
+        }
+    }
+
+    private func requestAccessibilityPermission() {
+        let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
+        AXIsProcessTrustedWithOptions(options)
     }
 
     /// Hotword text saved to corpusText on ASR Config.
@@ -568,6 +623,47 @@ private struct ASRServiceRow: View {
         }
         .padding(.vertical, 4)
         .onAppear { localApiKey = service.apiKey }
+    }
+}
+
+// MARK: - Permission Row
+
+private struct PermissionRow: View {
+    let icon: String
+    let title: String
+    let description: String
+    let isGranted: Bool
+    let onRequest: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon)
+                .foregroundColor(isGranted ? .green : .secondary)
+                .frame(width: 20)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.subheadline)
+                Text(description)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            Spacer()
+
+            if isGranted {
+                Label("已授权", systemImage: "checkmark.circle.fill")
+                    .font(.caption)
+                    .foregroundColor(.green)
+            } else {
+                Button("开启") {
+                    onRequest()
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .tint(.blue)
+            }
+        }
     }
 }
 
